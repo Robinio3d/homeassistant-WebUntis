@@ -2,6 +2,77 @@ from .const import TEMPLATE_OPTIONS
 from .utils.web_untis import get_lesson_name, get_lesson_name_str
 
 
+
+# Translations for the clean notification template. English is the fallback.
+# Additional languages can be added without changing the notification logic.
+CLEAN_NOTIFICATION_TRANSLATIONS = {
+    "en": {
+        "cancelled": "Lesson cancelled", "rooms": "Room changed",
+        "teachers": "Teacher changed", "subject": "Subject changed",
+        "replacement": "Lesson replaced", "code": "Status changed",
+        "lstext": "Lesson text changed", "info": "Info text changed",
+        "test": "Notification test", "homework": "Homework",
+        "cancelled_body": "{subject} is cancelled on {date}, {time}.",
+        "rooms_body": "{subject} on {date}, {time}: room changed from {old} to {new}.",
+        "teachers_body": "{subject} on {date}, {time}: teacher changed from {old} to {new}.",
+        "subject_body": "On {date}, {time}: subject changed from {old} to {new}.",
+        "replacement_body": "On {date}, {time}: {old} is replaced by {new}.",
+        "change_body": "{subject} on {date}, {time}: {title} ({old} → {new}).",
+        "simple_body": "{subject} on {date}, {time}: {title}.",
+        "homework_body": "{subject}: {text}\nAssigned: {assigned}\nDue: {due}",
+    },
+    "de": {
+        "cancelled": "Unterrichtsausfall", "rooms": "Raumänderung",
+        "teachers": "Lehrerwechsel", "subject": "Fachänderung",
+        "replacement": "Vertretung", "code": "Statusänderung",
+        "lstext": "Änderung des Unterrichtstextes", "info": "Infoänderung",
+        "test": "Testbenachrichtigung", "homework": "Hausaufgabe",
+        "cancelled_body": "{subject} fällt am {date} von {time} Uhr aus.",
+        "rooms_body": "{subject} findet am {date} von {time} Uhr in Raum {new} statt (vorher {old}).",
+        "teachers_body": "{subject} am {date} von {time} Uhr: Lehrkraft von {old} zu {new} geändert.",
+        "subject_body": "Am {date} von {time} Uhr: Fach von {old} zu {new} geändert.",
+        "replacement_body": "Am {date} von {time} Uhr wird {old} durch {new} ersetzt.",
+        "change_body": "{subject} am {date} von {time} Uhr: {title} ({old} → {new}).",
+        "simple_body": "{subject} am {date} von {time} Uhr: {title}.",
+        "homework_body": "{subject}: {text}\nAufgegeben: {assigned}\nAbgabe: {due}",
+    },
+}
+
+
+def _clean_language(service):
+    # The service configuration may provide a language/locale; otherwise use English.
+    locale = str(service.get("language") or service.get("locale") or "en")
+    language = locale.replace("_", "-").split("-")[0].lower()
+    return language if language in CLEAN_NOTIFICATION_TRANSLATIONS else "en"
+
+
+def _clean_text(value):
+    return str(value).strip() if value is not None else ""
+
+
+def _clean_notification(changes, service):
+    strings = CLEAN_NOTIFICATION_TRANSLATIONS[_clean_language(service)]
+    kind = changes.get("change", "code")
+    title = strings.get(kind, strings["code"])
+    values = {
+        "subject": _clean_text(changes.get("subject")),
+        "date": _clean_text(changes.get("date")),
+        "time": f"{_clean_text(changes.get('time_start'))}–{_clean_text(changes.get('time_end'))}",
+        "old": _clean_text(changes.get("old")),
+        "new": _clean_text(changes.get("new")),
+        "title": title,
+    }
+    if kind == "cancelled":
+        body_key = "cancelled_body"
+    elif kind in ("rooms", "teachers", "subject", "replacement") and values["old"] and values["new"]:
+        body_key = f"{kind}_body"
+    elif kind == "test" or not (values["old"] and values["new"]):
+        body_key = "simple_body"
+    else:
+        body_key = "change_body"
+    return {"title": title, "message": strings[body_key].format(**values)}
+
+
 def compare_timetables(old_timetable, new_timetable) -> list:
     updated_items = []
 
@@ -148,88 +219,85 @@ def compare_timetables(old_timetable, new_timetable) -> list:
     return updated_items
 
 
-# Beginn der Schulstunden (jeweils 45 Minuten)
-LESSON_STARTS = [
-    "07:50", "08:40", "09:40", "10:30", "11:30",
-    "12:20", "13:05", "13:55", "14:40", "15:30",
-]
-
-
-def get_lesson_hours(time_start, time_end):
-    """Ermittelt betroffene Schulstunden aus einem Zeitintervall."""
-    from datetime import datetime, timedelta
-
-    try:
-        start = datetime.strptime(time_start, "%H:%M")
-        end = datetime.strptime(time_end, "%H:%M")
-    except (TypeError, ValueError):
-        return f"{time_start}–{time_end} Uhr"
-
-    affected = []
-    for number, clock in enumerate(LESSON_STARTS, start=1):
-        lesson_start = datetime.strptime(clock, "%H:%M")
-        lesson_end = lesson_start + timedelta(minutes=45)
-        if start < lesson_end and end > lesson_start:
-            affected.append(number)
-
-    if not affected:
-        return f"{time_start}–{time_end} Uhr"
-    if len(affected) == 1:
-        return f"{affected[0]}. Stunde"
-    if affected == list(range(affected[0], affected[-1] + 1)):
-        return f"{affected[0]}.–{affected[-1]}. Stunde"
-    return ", ".join(f"{n}." for n in affected) + " Stunde(n)"
-
-
 def get_notification_data(changes, service, entry_title):
+
     message = ""
     title = ""
     data = {}
     result = {}
 
     template = service.get("template", TEMPLATE_OPTIONS[0])
-    hours = get_lesson_hours(changes["time_start"], changes["time_end"])
-    cancelled = changes["change"] == "cancelled"
 
-    if cancelled:
-        title = "Unterrichtsausfall"
-        message = f'{changes["subject"]} fällt am {changes["date"]} in der {hours} aus.'
-    else:
-        title = changes["title"]
-        message = (
-            f'{changes["subject"]} am {changes["date"]} '
-            f'({hours})'
-        )
-        if changes["change"] not in ["test"]:
-            message += f'\nAlt: {changes["old"]}\nNeu: {changes["new"]}'
+    if template == "clean_formatted_message":
+        result = _clean_notification(changes, service)
 
-    if template == "message_title":
+    if template == "message_title" or template == "message":
+        title = f"WebUntis ({entry_title}) - {changes['title']}"
         result["title"] = title
-    elif template == "message":
+        message = f"""Subject: {changes["subject"]}
+Date: {changes["date"]}
+Time: {changes["time_start"]} - {changes["time_end"]}"""
+
+        if changes["change"] not in ["cancelled", "test"]:
+            message += f"""
+Change ({changes["change"]}):
+Old: {changes["old"]}
+New: {changes["new"]}"""
+
+    if template == "message":
         message = f"{title}\n{message}"
-    elif template == "telegram":
-        message = f"<b>{title}</b>\n{message}"
+        result.pop("title")
+
+    if template == "telegram":
+        message = f"""
+<b>WebUntis ({entry_title}) - {changes["title"]}</b>
+<b>Subject:</b> {changes["subject"]}
+<b>Date:</b> {changes["date"]}
+<b>Time:</b> {changes["time_start"]} - {changes["time_end"]}"""
+
+        if changes["change"] not in ["cancelled", "test"]:
+            message += f"""
+<b>{changes["change"]}</b>
+<b>Old:</b> {changes["old"]}
+<b>New:</b> {changes["new"]}"""
         data = {"parse_mode": "html"}
-    elif template == "discord":
+
+    if template == "discord":
         data = {
             "embed": {
-                "title": title,
-                "description": message,
+                "title": changes["title"],
+                "description": entry_title,
                 "color": 16750848,
                 "author": {
                     "name": "WebUntis",
                     "url": "https://www.home-assistant.io",
                     "icon_url": "https://brands.home-assistant.io/webuntis/icon.png",
                 },
+                "fields": [
+                    {"name": "Subject", "value": changes["subject"], "inline": False},
+                    {"name": "Date", "value": changes["date"], "inline": False},
+                    {"name": "Time", "value": "", "inline": False},
+                    {"name": "Start", "value": changes["time_start"]},
+                    {"name": "End", "value": changes["time_end"]},
+                ],
             }
         }
-        # Discord verwendet das Embed statt des normalen Nachrichtentexts.
-        message = ""
-    else:
-        # Unbekannte Vorlagen bekommen eine einfache Textnachricht.
-        result["title"] = title
+
+        if changes["change"] not in ["cancelled", "test"]:
+            data["embed"]["fields"].extend(
+                [
+                    {
+                        "name": changes["title"].replace(" changed", ""),
+                        "value": "",
+                        "inline": False,
+                    },
+                    {"name": "Old", "value": changes["old"]},
+                    {"name": "New", "value": changes["new"]},
+                ]
+            )
 
     result["message"] = message
+
     return result, data
 
 
@@ -255,7 +323,16 @@ def get_notification_data_homework(parameters, service, entry_title, server):
 
     template = service.get("template", TEMPLATE_OPTIONS[0])
 
-    if template == "message_title":
+    if template == "clean_formatted_message":
+        strings = CLEAN_NOTIFICATION_TRANSLATIONS[_clean_language(service)]
+        title = strings["homework"]
+        message = strings["homework_body"].format(
+            subject=subject, text=_clean_text(parameters.get("text")),
+            assigned=_clean_text(parameters.get("date_assigned")),
+            due=_clean_text(parameters.get("due_date")),
+        )
+
+    elif template == "message_title":
         title = f"WebUntis ({entry_title}) - Homework: {subject}"
         message = f"""{parameters["text"]}
 Subject: {parameters["subject"]}

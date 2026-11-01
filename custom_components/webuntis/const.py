@@ -45,7 +45,7 @@ NOTIFY_OPTIONS = [
     "replacement",
 ]
 
-TEMPLATE_OPTIONS = ["message_title", "message", "discord", "telegram"]
+TEMPLATE_OPTIONS = ["message_title", "message", "discord", "telegram", "clean_formatted_message"]
 
 
 ICON_SENSOR_NEXT_CLASS = "mdi:table-clock"

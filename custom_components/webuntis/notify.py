@@ -296,7 +296,8 @@ New: {changes["new"]}"""
                 ]
             )
 
-    result["message"] = message
+    if template != "clean_formatted_message":
+        result["message"] = message
 
     return result, data
 

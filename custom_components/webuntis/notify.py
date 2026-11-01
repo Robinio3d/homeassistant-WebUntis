@@ -3,47 +3,22 @@ from .utils.web_untis import get_lesson_name, get_lesson_name_str
 
 
 
-# Translations for the clean notification template. English is the fallback.
-# Additional languages can be added without changing the notification logic.
-CLEAN_NOTIFICATION_TRANSLATIONS = {
-    "en": {
-        "cancelled": "Lesson cancelled", "rooms": "Room changed",
-        "teachers": "Teacher changed", "subject": "Subject changed",
-        "replacement": "Lesson replaced", "code": "Status changed",
-        "lstext": "Lesson text changed", "info": "Info text changed",
-        "test": "Notification test", "homework": "Homework",
-        "cancelled_body": "{subject} is cancelled on {date}, {time}.",
-        "rooms_body": "{subject} on {date}, {time}: room changed from {old} to {new}.",
-        "teachers_body": "{subject} on {date}, {time}: teacher changed from {old} to {new}.",
-        "subject_body": "On {date}, {time}: subject changed from {old} to {new}.",
-        "replacement_body": "On {date}, {time}: {old} is replaced by {new}.",
-        "change_body": "{subject} on {date}, {time}: {title} ({old} → {new}).",
-        "simple_body": "{subject} on {date}, {time}: {title}.",
-        "homework_body": "{subject}: {text}\nAssigned: {assigned}\nDue: {due}",
-    },
-    "de": {
-        "cancelled": "Unterrichtsausfall", "rooms": "Raumänderung",
-        "teachers": "Lehrerwechsel", "subject": "Fachänderung",
-        "replacement": "Vertretung", "code": "Statusänderung",
-        "lstext": "Änderung des Unterrichtstextes", "info": "Infoänderung",
-        "test": "Testbenachrichtigung", "homework": "Hausaufgabe",
-        "cancelled_body": "{subject} fällt am {date} von {time} Uhr aus.",
-        "rooms_body": "{subject} findet am {date} von {time} Uhr in Raum {new} statt (vorher {old}).",
-        "teachers_body": "{subject} am {date} von {time} Uhr: Lehrkraft von {old} zu {new} geändert.",
-        "subject_body": "Am {date} von {time} Uhr: Fach von {old} zu {new} geändert.",
-        "replacement_body": "Am {date} von {time} Uhr wird {old} durch {new} ersetzt.",
-        "change_body": "{subject} am {date} von {time} Uhr: {title} ({old} → {new}).",
-        "simple_body": "{subject} am {date} von {time} Uhr: {title}.",
-        "homework_body": "{subject}: {text}\nAufgegeben: {assigned}\nAbgabe: {due}",
-    },
-}
+# Notification labels are taken from the integration's existing translations.
+# English remains the fallback when no translation is available.
+from functools import lru_cache
+from pathlib import Path
+import json
 
 
-def _clean_language(service):
-    # The service configuration may provide a language/locale; otherwise use English.
-    locale = str(service.get("language") or service.get("locale") or "en")
-    language = locale.replace("_", "-").split("-")[0].lower()
-    return language if language in CLEAN_NOTIFICATION_TRANSLATIONS else "en"
+@lru_cache(maxsize=16)
+def _notification_strings(language):
+    path = Path(__file__).resolve().parent / "translations" / f"{language}.json"
+    try:
+        with path.open(encoding="utf-8") as file:
+            translations = json.load(file)
+    except (OSError, ValueError):
+        return {}
+    return translations
 
 
 def _clean_text(value):
@@ -51,26 +26,32 @@ def _clean_text(value):
 
 
 def _clean_notification(changes, service):
-    strings = CLEAN_NOTIFICATION_TRANSLATIONS[_clean_language(service)]
+    language = str(service.get("language") or service.get("locale") or "en").replace("_", "-").split("-")[0].lower()
+    translations = _notification_strings(language)
+    event_states = (translations.get("entity", {}).get("event", {})
+                    .get("lesson_change", {}).get("state_attributes", {})
+                    .get("event_type", {}).get("state", {}))
+    messages = translations.get("notify_messages", {})
     kind = changes.get("change", "code")
-    title = strings.get(kind, strings["code"])
-    values = {
-        "subject": _clean_text(changes.get("subject")),
-        "date": _clean_text(changes.get("date")),
-        "time": f"{_clean_text(changes.get('time_start'))}–{_clean_text(changes.get('time_end'))}",
-        "old": _clean_text(changes.get("old")),
-        "new": _clean_text(changes.get("new")),
-        "title": title,
+    title = event_states.get(kind) or changes.get("title") or "Lesson changed"
+    subject = _clean_text(changes.get("subject"))
+    date = _clean_text(changes.get("date"))
+    start = _clean_text(changes.get("time_start"))
+    end = _clean_text(changes.get("time_end"))
+    old = _clean_text(changes.get("old"))
+    new = _clean_text(changes.get("new"))
+    values = dict(subject=subject, date=date, time=f"{start}–{end}", old=old, new=new, title=title)
+    fallback = {
+        "cancelled": "{subject} is cancelled on {date}, {time}.",
+        "rooms": "{subject} on {date}, {time}: room changed from {old} to {new}.",
+        "teachers": "{subject} on {date}, {time}: teacher changed from {old} to {new}.",
+        "subject": "On {date}, {time}: subject changed from {old} to {new}.",
+        "replacement": "On {date}, {time}: {old} is replaced by {new}.",
+        "change": "{subject} on {date}, {time}: {title} ({old} → {new}).",
+        "simple": "{subject} on {date}, {time}: {title}.",
     }
-    if kind == "cancelled":
-        body_key = "cancelled_body"
-    elif kind in ("rooms", "teachers", "subject", "replacement") and values["old"] and values["new"]:
-        body_key = f"{kind}_body"
-    elif kind == "test" or not (values["old"] and values["new"]):
-        body_key = "simple_body"
-    else:
-        body_key = "change_body"
-    return {"title": title, "message": strings[body_key].format(**values)}
+    key = kind if kind == "cancelled" or (kind in ("rooms", "teachers", "subject", "replacement") and old and new) else ("change" if old and new else "simple")
+    return {"title": title, "message": messages.get(key, fallback[key]).format(**values)}
 
 
 def compare_timetables(old_timetable, new_timetable) -> list:
@@ -325,9 +306,11 @@ def get_notification_data_homework(parameters, service, entry_title, server):
     template = service.get("template", TEMPLATE_OPTIONS[0])
 
     if template == "clean_formatted_message":
-        strings = CLEAN_NOTIFICATION_TRANSLATIONS[_clean_language(service)]
-        title = strings["homework"]
-        message = strings["homework_body"].format(
+        language = str(service.get("language") or service.get("locale") or "en").replace("_", "-").split("-")[0].lower()
+        translations = _notification_strings(language)
+        title = (translations.get("entity", {}).get("event", {}).get("new_homework", {}).get("name") or "Homework")
+        pattern = translations.get("notify_messages", {}).get("homework", "{subject}: {text}\nAssigned: {assigned}\nDue: {due}")
+        message = pattern.format(
             subject=subject, text=_clean_text(parameters.get("text")),
             assigned=_clean_text(parameters.get("date_assigned")),
             due=_clean_text(parameters.get("due_date")),

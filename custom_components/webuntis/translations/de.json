@@ -394,7 +394,8 @@
       "options": {
         "discord": "Discord",
         "message": "Nachricht",
-        "message_title": "Nachricht & Titel"
+        "message_title": "Nachricht & Titel",
+        "clean_formatted_message": "Klar formatierte Nachricht"
       }
     },
     "timetable_source": {
@@ -501,5 +502,15 @@
       },
       "name": "Stundenplan abrufen"
     }
+  },
+  "notify_messages": {
+    "cancelled": "{subject} fällt am {date} von {time} Uhr aus.",
+    "rooms": "{subject} findet am {date} von {time} Uhr in Raum {new} statt (vorher {old}).",
+    "teachers": "{subject} am {date} von {time} Uhr: Lehrkraft von {old} zu {new} geändert.",
+    "subject": "Am {date} von {time} Uhr: Fach von {old} zu {new} geändert.",
+    "replacement": "Am {date} von {time} Uhr wird {old} durch {new} ersetzt.",
+    "change": "{subject} am {date} von {time} Uhr: {title} ({old} → {new}).",
+    "simple": "{subject} am {date} von {time} Uhr: {title}.",
+    "homework": "{subject}: {text}\nAufgegeben: {assigned}\nAbgabe: {due}"
   }
 }

@@ -148,82 +148,88 @@ def compare_timetables(old_timetable, new_timetable) -> list:
     return updated_items
 
 
-def get_notification_data(changes, service, entry_title):
+# Beginn der Schulstunden (jeweils 45 Minuten)
+LESSON_STARTS = [
+    "07:50", "08:40", "09:40", "10:30", "11:30",
+    "12:20", "13:05", "13:55", "14:40", "15:30",
+]
 
+
+def get_lesson_hours(time_start, time_end):
+    """Ermittelt betroffene Schulstunden aus einem Zeitintervall."""
+    from datetime import datetime, timedelta
+
+    try:
+        start = datetime.strptime(time_start, "%H:%M")
+        end = datetime.strptime(time_end, "%H:%M")
+    except (TypeError, ValueError):
+        return f"{time_start}–{time_end} Uhr"
+
+    affected = []
+    for number, clock in enumerate(LESSON_STARTS, start=1):
+        lesson_start = datetime.strptime(clock, "%H:%M")
+        lesson_end = lesson_start + timedelta(minutes=45)
+        if start < lesson_end and end > lesson_start:
+            affected.append(number)
+
+    if not affected:
+        return f"{time_start}–{time_end} Uhr"
+    if len(affected) == 1:
+        return f"{affected[0]}. Stunde"
+    if affected == list(range(affected[0], affected[-1] + 1)):
+        return f"{affected[0]}.–{affected[-1]}. Stunde"
+    return ", ".join(f"{n}." for n in affected) + " Stunde(n)"
+
+
+def get_notification_data(changes, service, entry_title):
     message = ""
     title = ""
     data = {}
     result = {}
 
     template = service.get("template", TEMPLATE_OPTIONS[0])
+    hours = get_lesson_hours(changes["time_start"], changes["time_end"])
+    cancelled = changes["change"] == "cancelled"
 
-    if template == "message_title" or template == "message":
-        title = f"WebUntis ({entry_title}) - {changes['title']}"
+    if cancelled:
+        title = "Unterrichtsausfall"
+        message = f'{changes["subject"]} fällt am {changes["date"]} in der {hours} aus.'
+    else:
+        title = changes["title"]
+        message = (
+            f'{changes["subject"]} am {changes["date"]} '
+            f'({hours})'
+        )
+        if changes["change"] not in ["test"]:
+            message += f'\nAlt: {changes["old"]}\nNeu: {changes["new"]}'
+
+    if template == "message_title":
         result["title"] = title
-        message = f"""Subject: {changes["subject"]}
-Date: {changes["date"]}
-Time: {changes["time_start"]} - {changes["time_end"]}"""
-
-        if changes["change"] not in ["cancelled", "test"]:
-            message += f"""
-Change ({changes["change"]}):
-Old: {changes["old"]}
-New: {changes["new"]}"""
-
-    if template == "message":
+    elif template == "message":
         message = f"{title}\n{message}"
-        result.pop("title")
-
-    if template == "telegram":
-        message = f"""
-<b>WebUntis ({entry_title}) - {changes["title"]}</b>
-<b>Subject:</b> {changes["subject"]}
-<b>Date:</b> {changes["date"]}
-<b>Time:</b> {changes["time_start"]} - {changes["time_end"]}"""
-
-        if changes["change"] not in ["cancelled", "test"]:
-            message += f"""
-<b>{changes["change"]}</b>
-<b>Old:</b> {changes["old"]}
-<b>New:</b> {changes["new"]}"""
+    elif template == "telegram":
+        message = f"<b>{title}</b>\n{message}"
         data = {"parse_mode": "html"}
-
-    if template == "discord":
+    elif template == "discord":
         data = {
             "embed": {
-                "title": changes["title"],
-                "description": entry_title,
+                "title": title,
+                "description": message,
                 "color": 16750848,
                 "author": {
                     "name": "WebUntis",
                     "url": "https://www.home-assistant.io",
                     "icon_url": "https://brands.home-assistant.io/webuntis/icon.png",
                 },
-                "fields": [
-                    {"name": "Subject", "value": changes["subject"], "inline": False},
-                    {"name": "Date", "value": changes["date"], "inline": False},
-                    {"name": "Time", "value": "", "inline": False},
-                    {"name": "Start", "value": changes["time_start"]},
-                    {"name": "End", "value": changes["time_end"]},
-                ],
             }
         }
-
-        if changes["change"] not in ["cancelled", "test"]:
-            data["embed"]["fields"].extend(
-                [
-                    {
-                        "name": changes["title"].replace(" changed", ""),
-                        "value": "",
-                        "inline": False,
-                    },
-                    {"name": "Old", "value": changes["old"]},
-                    {"name": "New", "value": changes["new"]},
-                ]
-            )
+        # Discord verwendet das Embed statt des normalen Nachrichtentexts.
+        message = ""
+    else:
+        # Unbekannte Vorlagen bekommen eine einfache Textnachricht.
+        result["title"] = title
 
     result["message"] = message
-
     return result, data
 
 
